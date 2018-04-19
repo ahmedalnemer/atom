@@ -25,6 +25,8 @@ document.registerElement('text-editor-component-test-element', {
   })
 })
 
+const editors = []
+
 describe('TextEditorComponent', () => {
   beforeEach(() => {
     jasmine.useRealClock()
@@ -33,6 +35,13 @@ describe('TextEditorComponent', () => {
     const scrollbarStyle = document.createElement('style')
     scrollbarStyle.textContent = '::-webkit-scrollbar { -webkit-appearance: none }'
     jasmine.attachToDOM(scrollbarStyle)
+  })
+
+  afterEach(() => {
+    for (const editor of editors) {
+      editor.destroy()
+    }
+    editors.length = 0
   })
 
   describe('rendering', () => {
@@ -95,7 +104,7 @@ describe('TextEditorComponent', () => {
 
       {
         expect(editor.getApproximateLongestScreenRow()).toBe(3)
-        const expectedWidth = Math.round(
+        const expectedWidth = Math.ceil(
           component.pixelPositionForScreenPosition(Point(3, Infinity)).left +
           component.getBaseCharacterWidth()
         )
@@ -112,7 +121,7 @@ describe('TextEditorComponent', () => {
         // Capture the width of the lines before requesting the width of
         // longest line, because making that request forces a DOM update
         const actualWidth = element.querySelector('.lines').style.width
-        const expectedWidth = Math.round(
+        const expectedWidth = Math.ceil(
           component.pixelPositionForScreenPosition(Point(6, Infinity)).left +
           component.getBaseCharacterWidth()
         )
@@ -254,13 +263,13 @@ describe('TextEditorComponent', () => {
     it('keeps the number of tiles stable when the visible line count changes during vertical scrolling', async () => {
       const {component, element, editor} = buildComponent({rowsPerTile: 3, autoHeight: false})
       await setEditorHeightInLines(component, 5.5)
-      expect(component.refs.lineTiles.children.length).toBe(3 + 1) // account for cursors container
+      expect(component.refs.lineTiles.children.length).toBe(3 + 2) // account for cursors and highlights containers
 
       await setScrollTop(component, 0.5 * component.getLineHeight())
-      expect(component.refs.lineTiles.children.length).toBe(3 + 1) // account for cursors container
+      expect(component.refs.lineTiles.children.length).toBe(3 + 2) // account for cursors and highlights containers
 
       await setScrollTop(component, 1 * component.getLineHeight())
-      expect(component.refs.lineTiles.children.length).toBe(3 + 1) // account for cursors container
+      expect(component.refs.lineTiles.children.length).toBe(3 + 2) // account for cursors and highlights containers
     })
 
     it('recycles tiles on resize', async () => {
@@ -555,9 +564,20 @@ describe('TextEditorComponent', () => {
 
     it('gives cursors at the end of lines the width of an "x" character', async () => {
       const {component, element, editor} = buildComponent()
+      editor.setText('abcde')
+      await setEditorWidthInCharacters(component, 5.5)
+
       editor.setCursorScreenPosition([0, Infinity])
       await component.getNextUpdatePromise()
       expect(element.querySelector('.cursor').offsetWidth).toBe(Math.round(component.getBaseCharacterWidth()))
+
+      // Clip cursor width when soft-wrap is on and the cursor is at the end of
+      // the line. This prevents the parent tile from disabling sub-pixel
+      // anti-aliasing. For some reason, adding overflow: hidden to the cursor
+      // container doesn't solve this issue so we're adding this workaround instead.
+      editor.setSoftWrapped(true)
+      await component.getNextUpdatePromise()
+      expect(element.querySelector('.cursor').offsetWidth).toBeLessThan(Math.round(component.getBaseCharacterWidth()))
     })
 
     it('positions and sizes cursors correctly when they are located next to a fold marker', async () => {
@@ -786,7 +806,7 @@ describe('TextEditorComponent', () => {
       const {editor, element, component} = buildComponent()
       expect(element.dataset.grammar).toBe('text plain null-grammar')
 
-      editor.setGrammar(atom.grammars.grammarForScopeName('source.js'))
+      atom.grammars.assignLanguageMode(editor.getBuffer(), 'source.js')
       await component.getNextUpdatePromise()
       expect(element.dataset.grammar).toBe('source js')
     })
@@ -912,7 +932,7 @@ describe('TextEditorComponent', () => {
         const initialSeed = Date.now()
         for (var i = 0; i < 20; i++) {
           let seed = initialSeed + i
-          // seed = 1507224195357
+          // seed = 1520247533732
           const failureMessage = 'Randomized test failed with seed: ' + seed
           const random = Random(seed)
 
@@ -921,6 +941,12 @@ describe('TextEditorComponent', () => {
           editor.setSoftWrapped(Boolean(random(2)))
           await setEditorWidthInCharacters(component, random(20))
           await setEditorHeightInLines(component, random(10))
+
+          element.style.fontSize = random(20) + 'px'
+          element.style.lineHeight = random.floatBetween(0.1, 2.0)
+          TextEditor.didUpdateStyles()
+          await component.getNextUpdatePromise()
+
           element.focus()
 
           for (var j = 0; j < 5; j++) {
@@ -1325,7 +1351,7 @@ describe('TextEditorComponent', () => {
       {
         const expectedScrollTop = 20 * (scrollSensitivity / 100)
         const expectedScrollLeft = component.getScrollLeft()
-        component.didMouseWheel({deltaX: 5, deltaY: 20})
+        component.didMouseWheel({wheelDeltaX: -5, wheelDeltaY: -20})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.getScrollLeft()).toBe(expectedScrollLeft)
         expect(component.refs.content.style.transform).toBe(`translate(${-expectedScrollLeft}px, ${-expectedScrollTop}px)`)
@@ -1334,7 +1360,7 @@ describe('TextEditorComponent', () => {
       {
         const expectedScrollTop = component.getScrollTop() - (10 * (scrollSensitivity / 100))
         const expectedScrollLeft = component.getScrollLeft()
-        component.didMouseWheel({deltaX: 5, deltaY: -10})
+        component.didMouseWheel({wheelDeltaX: -5, wheelDeltaY: 10})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.getScrollLeft()).toBe(expectedScrollLeft)
         expect(component.refs.content.style.transform).toBe(`translate(${-expectedScrollLeft}px, ${-expectedScrollTop}px)`)
@@ -1343,7 +1369,7 @@ describe('TextEditorComponent', () => {
       {
         const expectedScrollTop = component.getScrollTop()
         const expectedScrollLeft = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 20, deltaY: -10})
+        component.didMouseWheel({wheelDeltaX: -20, wheelDeltaY: 10})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.getScrollLeft()).toBe(expectedScrollLeft)
         expect(component.refs.content.style.transform).toBe(`translate(${-expectedScrollLeft}px, ${-expectedScrollTop}px)`)
@@ -1352,44 +1378,10 @@ describe('TextEditorComponent', () => {
       {
         const expectedScrollTop = component.getScrollTop()
         const expectedScrollLeft = component.getScrollLeft() - (10 * (scrollSensitivity / 100))
-        component.didMouseWheel({deltaX: -10, deltaY: 8})
+        component.didMouseWheel({wheelDeltaX: 10, wheelDeltaY: -8})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.getScrollLeft()).toBe(expectedScrollLeft)
         expect(component.refs.content.style.transform).toBe(`translate(${-expectedScrollLeft}px, ${-expectedScrollTop}px)`)
-      }
-    })
-
-    it('always scrolls by a minimum of 1, even when the delta is small or the scroll sensitivity is low', () => {
-      const scrollSensitivity = 10
-      const {component, editor} = buildComponent({height: 50, width: 50, scrollSensitivity})
-
-      {
-        component.didMouseWheel({deltaX: 0, deltaY: 3})
-        expect(component.getScrollTop()).toBe(1)
-        expect(component.getScrollLeft()).toBe(0)
-        expect(component.refs.content.style.transform).toBe(`translate(0px, -1px)`)
-      }
-
-      {
-        component.didMouseWheel({deltaX: 4, deltaY: 0})
-        expect(component.getScrollTop()).toBe(1)
-        expect(component.getScrollLeft()).toBe(1)
-        expect(component.refs.content.style.transform).toBe(`translate(-1px, -1px)`)
-      }
-
-      editor.update({scrollSensitivity: 100})
-      {
-        component.didMouseWheel({deltaX: 0, deltaY: -0.3})
-        expect(component.getScrollTop()).toBe(0)
-        expect(component.getScrollLeft()).toBe(1)
-        expect(component.refs.content.style.transform).toBe(`translate(-1px, 0px)`)
-      }
-
-      {
-        component.didMouseWheel({deltaX: -0.1, deltaY: 0})
-        expect(component.getScrollTop()).toBe(0)
-        expect(component.getScrollLeft()).toBe(0)
-        expect(component.refs.content.style.transform).toBe(`translate(0px, 0px)`)
       }
     })
 
@@ -1400,7 +1392,7 @@ describe('TextEditorComponent', () => {
       component.props.platform = 'linux'
       {
         const expectedScrollTop = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 0, deltaY: 20})
+        component.didMouseWheel({wheelDeltaX: 0, wheelDeltaY: -20})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.refs.content.style.transform).toBe(`translate(0px, -${expectedScrollTop}px)`)
         await setScrollTop(component, 0)
@@ -1408,7 +1400,7 @@ describe('TextEditorComponent', () => {
 
       {
         const expectedScrollLeft = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 0, deltaY: 20, shiftKey: true})
+        component.didMouseWheel({wheelDeltaX: 0, wheelDeltaY: -20, shiftKey: true})
         expect(component.getScrollLeft()).toBe(expectedScrollLeft)
         expect(component.refs.content.style.transform).toBe(`translate(-${expectedScrollLeft}px, 0px)`)
         await setScrollLeft(component, 0)
@@ -1416,7 +1408,7 @@ describe('TextEditorComponent', () => {
 
       {
         const expectedScrollTop = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 20, deltaY: 0, shiftKey: true})
+        component.didMouseWheel({wheelDeltaX: -20, wheelDeltaY: 0, shiftKey: true})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.refs.content.style.transform).toBe(`translate(0px, -${expectedScrollTop}px)`)
         await setScrollTop(component, 0)
@@ -1425,7 +1417,7 @@ describe('TextEditorComponent', () => {
       component.props.platform = 'win32'
       {
         const expectedScrollTop = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 0, deltaY: 20})
+        component.didMouseWheel({wheelDeltaX: 0, wheelDeltaY: -20})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.refs.content.style.transform).toBe(`translate(0px, -${expectedScrollTop}px)`)
         await setScrollTop(component, 0)
@@ -1433,7 +1425,7 @@ describe('TextEditorComponent', () => {
 
       {
         const expectedScrollLeft = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 0, deltaY: 20, shiftKey: true})
+        component.didMouseWheel({wheelDeltaX: 0, wheelDeltaY: -20, shiftKey: true})
         expect(component.getScrollLeft()).toBe(expectedScrollLeft)
         expect(component.refs.content.style.transform).toBe(`translate(-${expectedScrollLeft}px, 0px)`)
         await setScrollLeft(component, 0)
@@ -1441,7 +1433,7 @@ describe('TextEditorComponent', () => {
 
       {
         const expectedScrollTop = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 20, deltaY: 0, shiftKey: true})
+        component.didMouseWheel({wheelDeltaX: -20, wheelDeltaY: 0, shiftKey: true})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.refs.content.style.transform).toBe(`translate(0px, -${expectedScrollTop}px)`)
         await setScrollTop(component, 0)
@@ -1450,7 +1442,7 @@ describe('TextEditorComponent', () => {
       component.props.platform = 'darwin'
       {
         const expectedScrollTop = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 0, deltaY: 20})
+        component.didMouseWheel({wheelDeltaX: 0, wheelDeltaY: -20})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.refs.content.style.transform).toBe(`translate(0px, -${expectedScrollTop}px)`)
         await setScrollTop(component, 0)
@@ -1458,7 +1450,7 @@ describe('TextEditorComponent', () => {
 
       {
         const expectedScrollTop = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 0, deltaY: 20, shiftKey: true})
+        component.didMouseWheel({wheelDeltaX: 0, wheelDeltaY: -20, shiftKey: true})
         expect(component.getScrollTop()).toBe(expectedScrollTop)
         expect(component.refs.content.style.transform).toBe(`translate(0px, -${expectedScrollTop}px)`)
         await setScrollTop(component, 0)
@@ -1466,7 +1458,7 @@ describe('TextEditorComponent', () => {
 
       {
         const expectedScrollLeft = 20 * (scrollSensitivity / 100)
-        component.didMouseWheel({deltaX: 20, deltaY: 0, shiftKey: true})
+        component.didMouseWheel({wheelDeltaX: -20, wheelDeltaY: 0, shiftKey: true})
         expect(component.getScrollLeft()).toBe(expectedScrollLeft)
         expect(component.refs.content.style.transform).toBe(`translate(-${expectedScrollLeft}px, 0px)`)
         await setScrollLeft(component, 0)
@@ -2831,431 +2823,437 @@ describe('TextEditorComponent', () => {
 
   describe('mouse input', () => {
     describe('on the lines', () => {
-      it('positions the cursor on single-click', async () => {
-        const {component, element, editor} = buildComponent()
-        const {lineHeight} = component.measurements
+      describe('when there is only one cursor', () => {
+        it('positions the cursor on single-click or when middle-clicking', async () => {
+          for (const button of [0, 1]) {
+            const {component, element, editor} = buildComponent()
+            const {lineHeight} = component.measurements
 
-        editor.setCursorScreenPosition([Infinity, Infinity], {autoscroll: false})
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: clientLeftForCharacter(component, 0, 0) - 1,
-          clientY: clientTopForLine(component, 0) - 1
+            editor.setCursorScreenPosition([Infinity, Infinity], {autoscroll: false})
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: clientLeftForCharacter(component, 0, 0) - 1,
+              clientY: clientTopForLine(component, 0) - 1
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([0, 0])
+
+            const maxRow = editor.getLastScreenRow()
+            editor.setCursorScreenPosition([Infinity, Infinity], {autoscroll: false})
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: clientLeftForCharacter(component, maxRow, editor.lineLengthForScreenRow(maxRow)) + 1,
+              clientY: clientTopForLine(component, maxRow) + 1
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([maxRow, editor.lineLengthForScreenRow(maxRow)])
+
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: clientLeftForCharacter(component, 0, editor.lineLengthForScreenRow(0)) + 1,
+              clientY: clientTopForLine(component, 0) + lineHeight / 2
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([0, editor.lineLengthForScreenRow(0)])
+
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: (clientLeftForCharacter(component, 3, 0) + clientLeftForCharacter(component, 3, 1)) / 2,
+              clientY: clientTopForLine(component, 1) + lineHeight / 2
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([1, 0])
+
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 15)) / 2,
+              clientY: clientTopForLine(component, 3) + lineHeight / 2
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([3, 14])
+
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 15)) / 2 + 1,
+              clientY: clientTopForLine(component, 3) + lineHeight / 2
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([3, 15])
+
+            editor.getBuffer().setTextInRange([[3, 14], [3, 15]], '🐣')
+            await component.getNextUpdatePromise()
+
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 16)) / 2,
+              clientY: clientTopForLine(component, 3) + lineHeight / 2
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([3, 14])
+
+            component.didMouseDownOnContent({
+              detail: 1,
+              button,
+              clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 16)) / 2 + 1,
+              clientY: clientTopForLine(component, 3) + lineHeight / 2
+            })
+            expect(editor.getCursorScreenPosition()).toEqual([3, 16])
+
+            expect(editor.testAutoscrollRequests).toEqual([])
+          }
         })
-        expect(editor.getCursorScreenPosition()).toEqual([0, 0])
-
-        const maxRow = editor.getLastScreenRow()
-        editor.setCursorScreenPosition([Infinity, Infinity], {autoscroll: false})
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: clientLeftForCharacter(component, maxRow, editor.lineLengthForScreenRow(maxRow)) + 1,
-          clientY: clientTopForLine(component, maxRow) + 1
-        })
-        expect(editor.getCursorScreenPosition()).toEqual([maxRow, editor.lineLengthForScreenRow(maxRow)])
-
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: clientLeftForCharacter(component, 0, editor.lineLengthForScreenRow(0)) + 1,
-          clientY: clientTopForLine(component, 0) + lineHeight / 2
-        })
-        expect(editor.getCursorScreenPosition()).toEqual([0, editor.lineLengthForScreenRow(0)])
-
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: (clientLeftForCharacter(component, 3, 0) + clientLeftForCharacter(component, 3, 1)) / 2,
-          clientY: clientTopForLine(component, 1) + lineHeight / 2
-        })
-        expect(editor.getCursorScreenPosition()).toEqual([1, 0])
-
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 15)) / 2,
-          clientY: clientTopForLine(component, 3) + lineHeight / 2
-        })
-        expect(editor.getCursorScreenPosition()).toEqual([3, 14])
-
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 15)) / 2 + 1,
-          clientY: clientTopForLine(component, 3) + lineHeight / 2
-        })
-        expect(editor.getCursorScreenPosition()).toEqual([3, 15])
-
-        editor.getBuffer().setTextInRange([[3, 14], [3, 15]], '🐣')
-        await component.getNextUpdatePromise()
-
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 16)) / 2,
-          clientY: clientTopForLine(component, 3) + lineHeight / 2
-        })
-        expect(editor.getCursorScreenPosition()).toEqual([3, 14])
-
-        component.didMouseDownOnContent({
-          detail: 1,
-          button: 0,
-          clientX: (clientLeftForCharacter(component, 3, 14) + clientLeftForCharacter(component, 3, 16)) / 2 + 1,
-          clientY: clientTopForLine(component, 3) + lineHeight / 2
-        })
-        expect(editor.getCursorScreenPosition()).toEqual([3, 16])
-
-        expect(editor.testAutoscrollRequests).toEqual([])
       })
 
-      it('selects words on double-click', () => {
-        const {component, editor} = buildComponent()
-        const {clientX, clientY} = clientPositionForCharacter(component, 1, 16)
-        component.didMouseDownOnContent({detail: 1, button: 0, clientX, clientY})
-        component.didMouseDownOnContent({detail: 2, button: 0, clientX, clientY})
-        expect(editor.getSelectedScreenRange()).toEqual([[1, 13], [1, 21]])
-        expect(editor.testAutoscrollRequests).toEqual([])
-      })
+      describe('when the input is for the primary mouse button', () => {
+        it('selects words on double-click', () => {
+          const {component, editor} = buildComponent()
+          const {clientX, clientY} = clientPositionForCharacter(component, 1, 16)
+          component.didMouseDownOnContent({detail: 1, button: 0, clientX, clientY})
+          component.didMouseDownOnContent({detail: 2, button: 0, clientX, clientY})
+          expect(editor.getSelectedScreenRange()).toEqual([[1, 13], [1, 21]])
+          expect(editor.testAutoscrollRequests).toEqual([])
+        })
 
-      it('selects lines on triple-click', () => {
-        const {component, editor} = buildComponent()
-        const {clientX, clientY} = clientPositionForCharacter(component, 1, 16)
-        component.didMouseDownOnContent({detail: 1, button: 0, clientX, clientY})
-        component.didMouseDownOnContent({detail: 2, button: 0, clientX, clientY})
-        component.didMouseDownOnContent({detail: 3, button: 0, clientX, clientY})
-        expect(editor.getSelectedScreenRange()).toEqual([[1, 0], [2, 0]])
-        expect(editor.testAutoscrollRequests).toEqual([])
-      })
+        it('selects lines on triple-click', () => {
+          const {component, editor} = buildComponent()
+          const {clientX, clientY} = clientPositionForCharacter(component, 1, 16)
+          component.didMouseDownOnContent({detail: 1, button: 0, clientX, clientY})
+          component.didMouseDownOnContent({detail: 2, button: 0, clientX, clientY})
+          component.didMouseDownOnContent({detail: 3, button: 0, clientX, clientY})
+          expect(editor.getSelectedScreenRange()).toEqual([[1, 0], [2, 0]])
+          expect(editor.testAutoscrollRequests).toEqual([])
+        })
 
-      it('adds or removes cursors when holding cmd or ctrl when single-clicking', () => {
-        const {component, editor} = buildComponent({platform: 'darwin'})
-        expect(editor.getCursorScreenPositions()).toEqual([[0, 0]])
+        it('adds or removes cursors when holding cmd or ctrl when single-clicking', () => {
+          const {component, editor} = buildComponent({platform: 'darwin'})
+          expect(editor.getCursorScreenPositions()).toEqual([[0, 0]])
 
-        // add cursor at 1, 16
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 1, 16), {
+          // add cursor at 1, 16
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 1, 16), {
+              detail: 1,
+              button: 0,
+              metaKey: true
+            })
+          )
+          expect(editor.getCursorScreenPositions()).toEqual([[0, 0], [1, 16]])
+
+          // remove cursor at 0, 0
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 0, 0), {
+              detail: 1,
+              button: 0,
+              metaKey: true
+            })
+          )
+          expect(editor.getCursorScreenPositions()).toEqual([[1, 16]])
+
+          // cmd-click cursor at 1, 16 but don't remove it because it's the last one
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 1, 16), {
+              detail: 1,
+              button: 0,
+              metaKey: true
+            })
+          )
+          expect(editor.getCursorScreenPositions()).toEqual([[1, 16]])
+
+          // cmd-clicking within a selection destroys it
+          editor.addSelectionForScreenRange([[2, 10], [2, 15]], {autoscroll: false})
+          expect(editor.getSelectedScreenRanges()).toEqual([
+            [[1, 16], [1, 16]],
+            [[2, 10], [2, 15]]
+          ])
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 2, 13), {
+              detail: 1,
+              button: 0,
+              metaKey: true
+            })
+          )
+          expect(editor.getSelectedScreenRanges()).toEqual([
+            [[1, 16], [1, 16]]
+          ])
+
+          // ctrl-click does not add cursors on macOS, nor does it move the cursor
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 1, 4), {
+              detail: 1,
+              button: 0,
+              ctrlKey: true
+            })
+          )
+          expect(editor.getSelectedScreenRanges()).toEqual([
+            [[1, 16], [1, 16]]
+          ])
+
+          // ctrl-click adds cursors on platforms *other* than macOS
+          component.props.platform = 'win32'
+          editor.setCursorScreenPosition([1, 4], {autoscroll: false})
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 1, 16), {
+              detail: 1,
+              button: 0,
+              ctrlKey: true
+            })
+          )
+          expect(editor.getCursorScreenPositions()).toEqual([[1, 4], [1, 16]])
+
+          expect(editor.testAutoscrollRequests).toEqual([])
+        })
+
+        it('adds word selections when holding cmd or ctrl when double-clicking', () => {
+          const {component, editor} = buildComponent()
+          editor.addCursorAtScreenPosition([1, 16], {autoscroll: false})
+          expect(editor.getCursorScreenPositions()).toEqual([[0, 0], [1, 16]])
+
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 1, 16), {
+              detail: 1,
+              button: 0,
+              metaKey: true
+            })
+          )
+          component.didMouseDownOnContent(
+            Object.assign(clientPositionForCharacter(component, 1, 16), {
+              detail: 2,
+              button: 0,
+              metaKey: true
+            })
+          )
+          expect(editor.getSelectedScreenRanges()).toEqual([
+            [[0, 0], [0, 0]],
+            [[1, 13], [1, 21]]
+          ])
+          expect(editor.testAutoscrollRequests).toEqual([])
+        })
+
+        it('adds line selections when holding cmd or ctrl when triple-clicking', () => {
+          const {component, editor} = buildComponent()
+          editor.addCursorAtScreenPosition([1, 16], {autoscroll: false})
+          expect(editor.getCursorScreenPositions()).toEqual([[0, 0], [1, 16]])
+
+          const {clientX, clientY} = clientPositionForCharacter(component, 1, 16)
+          component.didMouseDownOnContent({detail: 1, button: 0, metaKey: true, clientX, clientY})
+          component.didMouseDownOnContent({detail: 2, button: 0, metaKey: true, clientX, clientY})
+          component.didMouseDownOnContent({detail: 3, button: 0, metaKey: true, clientX, clientY})
+
+          expect(editor.getSelectedScreenRanges()).toEqual([
+            [[0, 0], [0, 0]],
+            [[1, 0], [2, 0]]
+          ])
+          expect(editor.testAutoscrollRequests).toEqual([])
+        })
+
+        it('expands the last selection on shift-click', () => {
+          const {component, element, editor} = buildComponent()
+
+          editor.setCursorScreenPosition([2, 18], {autoscroll: false})
+          component.didMouseDownOnContent(Object.assign({
             detail: 1,
             button: 0,
-            metaKey: true
-          })
-        )
-        expect(editor.getCursorScreenPositions()).toEqual([[0, 0], [1, 16]])
+            shiftKey: true
+          }, clientPositionForCharacter(component, 1, 4)))
+          expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [2, 18]])
 
-        // remove cursor at 0, 0
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 0, 0), {
+          component.didMouseDownOnContent(Object.assign({
             detail: 1,
             button: 0,
-            metaKey: true
-          })
-        )
-        expect(editor.getCursorScreenPositions()).toEqual([[1, 16]])
+            shiftKey: true
+          }, clientPositionForCharacter(component, 4, 4)))
+          expect(editor.getSelectedScreenRange()).toEqual([[2, 18], [4, 4]])
 
-        // cmd-click cursor at 1, 16 but don't remove it because it's the last one
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 1, 16), {
+          // reorients word-wise selections to keep the word selected regardless of
+          // where the subsequent shift-click occurs
+          editor.setCursorScreenPosition([2, 18], {autoscroll: false})
+          editor.getLastSelection().selectWord({autoscroll: false})
+          component.didMouseDownOnContent(Object.assign({
             detail: 1,
             button: 0,
-            metaKey: true
-          })
-        )
-        expect(editor.getCursorScreenPositions()).toEqual([[1, 16]])
+            shiftKey: true
+          }, clientPositionForCharacter(component, 1, 4)))
+          expect(editor.getSelectedScreenRange()).toEqual([[1, 2], [2, 20]])
 
-        // cmd-clicking within a selection destroys it
-        editor.addSelectionForScreenRange([[2, 10], [2, 15]], {autoscroll: false})
-        expect(editor.getSelectedScreenRanges()).toEqual([
-          [[1, 16], [1, 16]],
-          [[2, 10], [2, 15]]
-        ])
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 2, 13), {
+          component.didMouseDownOnContent(Object.assign({
             detail: 1,
             button: 0,
-            metaKey: true
-          })
-        )
-        expect(editor.getSelectedScreenRanges()).toEqual([
-          [[1, 16], [1, 16]]
-        ])
+            shiftKey: true
+          }, clientPositionForCharacter(component, 3, 11)))
+          expect(editor.getSelectedScreenRange()).toEqual([[2, 14], [3, 13]])
 
-        // ctrl-click does not add cursors on macOS
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 1, 4), {
+          // reorients line-wise selections to keep the line selected regardless of
+          // where the subsequent shift-click occurs
+          editor.setCursorScreenPosition([2, 18], {autoscroll: false})
+          editor.getLastSelection().selectLine(null, {autoscroll: false})
+          component.didMouseDownOnContent(Object.assign({
             detail: 1,
             button: 0,
-            ctrlKey: true
-          })
-        )
-        expect(editor.getSelectedScreenRanges()).toEqual([
-          [[1, 16], [1, 16]]
-        ])
+            shiftKey: true
+          }, clientPositionForCharacter(component, 1, 4)))
+          expect(editor.getSelectedScreenRange()).toEqual([[1, 0], [3, 0]])
 
-        // ctrl-click adds cursors on platforms *other* than macOS
-        component.props.platform = 'win32'
-        editor.setCursorScreenPosition([1, 4], {autoscroll: false})
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 1, 16), {
+          component.didMouseDownOnContent(Object.assign({
             detail: 1,
             button: 0,
-            ctrlKey: true
-          })
-        )
-        expect(editor.getCursorScreenPositions()).toEqual([[1, 4], [1, 16]])
+            shiftKey: true
+          }, clientPositionForCharacter(component, 3, 11)))
+          expect(editor.getSelectedScreenRange()).toEqual([[2, 0], [4, 0]])
 
-        expect(editor.testAutoscrollRequests).toEqual([])
-      })
+          expect(editor.testAutoscrollRequests).toEqual([])
+        })
 
-      it('adds word selections when holding cmd or ctrl when double-clicking', () => {
-        const {component, editor} = buildComponent()
-        editor.addCursorAtScreenPosition([1, 16], {autoscroll: false})
-        expect(editor.getCursorScreenPositions()).toEqual([[0, 0], [1, 16]])
+        it('expands the last selection on drag', () => {
+          const {component, editor} = buildComponent()
+          spyOn(component, 'handleMouseDragUntilMouseUp')
 
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 1, 16), {
+          component.didMouseDownOnContent(Object.assign({
             detail: 1,
             button: 0,
-            metaKey: true
-          })
-        )
-        component.didMouseDownOnContent(
-          Object.assign(clientPositionForCharacter(component, 1, 16), {
+          }, clientPositionForCharacter(component, 1, 4)))
+
+          {
+            const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[0][0]
+            didDrag(clientPositionForCharacter(component, 8, 8))
+            expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [8, 8]])
+            didDrag(clientPositionForCharacter(component, 4, 8))
+            expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [4, 8]])
+            didStopDragging()
+            expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [4, 8]])
+          }
+
+          // Click-drag a second selection... selections are not merged until the
+          // drag stops.
+          component.didMouseDownOnContent(Object.assign({
+            detail: 1,
+            button: 0,
+            metaKey: 1,
+          }, clientPositionForCharacter(component, 8, 8)))
+          {
+            const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[1][0]
+            didDrag(clientPositionForCharacter(component, 2, 8))
+            expect(editor.getSelectedScreenRanges()).toEqual([
+              [[1, 4], [4, 8]],
+              [[2, 8], [8, 8]]
+            ])
+            didDrag(clientPositionForCharacter(component, 6, 8))
+            expect(editor.getSelectedScreenRanges()).toEqual([
+              [[1, 4], [4, 8]],
+              [[6, 8], [8, 8]]
+            ])
+            didDrag(clientPositionForCharacter(component, 2, 8))
+            expect(editor.getSelectedScreenRanges()).toEqual([
+              [[1, 4], [4, 8]],
+              [[2, 8], [8, 8]]
+            ])
+            didStopDragging()
+            expect(editor.getSelectedScreenRanges()).toEqual([
+              [[1, 4], [8, 8]]
+            ])
+          }
+        })
+
+        it('expands the selection word-wise on double-click-drag', () => {
+          const {component, editor} = buildComponent()
+          spyOn(component, 'handleMouseDragUntilMouseUp')
+
+          component.didMouseDownOnContent(Object.assign({
+            detail: 1,
+            button: 0,
+          }, clientPositionForCharacter(component, 1, 4)))
+          component.didMouseDownOnContent(Object.assign({
             detail: 2,
             button: 0,
-            metaKey: true
-          })
-        )
-        expect(editor.getSelectedScreenRanges()).toEqual([
-          [[0, 0], [0, 0]],
-          [[1, 13], [1, 21]]
-        ])
-        expect(editor.testAutoscrollRequests).toEqual([])
-      })
+          }, clientPositionForCharacter(component, 1, 4)))
 
-      it('adds line selections when holding cmd or ctrl when triple-clicking', () => {
-        const {component, editor} = buildComponent()
-        editor.addCursorAtScreenPosition([1, 16], {autoscroll: false})
-        expect(editor.getCursorScreenPositions()).toEqual([[0, 0], [1, 16]])
-
-        const {clientX, clientY} = clientPositionForCharacter(component, 1, 16)
-        component.didMouseDownOnContent({detail: 1, button: 0, metaKey: true, clientX, clientY})
-        component.didMouseDownOnContent({detail: 2, button: 0, metaKey: true, clientX, clientY})
-        component.didMouseDownOnContent({detail: 3, button: 0, metaKey: true, clientX, clientY})
-
-        expect(editor.getSelectedScreenRanges()).toEqual([
-          [[0, 0], [0, 0]],
-          [[1, 0], [2, 0]]
-        ])
-        expect(editor.testAutoscrollRequests).toEqual([])
-      })
-
-      it('expands the last selection on shift-click', () => {
-        const {component, element, editor} = buildComponent()
-
-        editor.setCursorScreenPosition([2, 18], {autoscroll: false})
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-          shiftKey: true
-        }, clientPositionForCharacter(component, 1, 4)))
-        expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [2, 18]])
-
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-          shiftKey: true
-        }, clientPositionForCharacter(component, 4, 4)))
-        expect(editor.getSelectedScreenRange()).toEqual([[2, 18], [4, 4]])
-
-        // reorients word-wise selections to keep the word selected regardless of
-        // where the subsequent shift-click occurs
-        editor.setCursorScreenPosition([2, 18], {autoscroll: false})
-        editor.getLastSelection().selectWord({autoscroll: false})
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-          shiftKey: true
-        }, clientPositionForCharacter(component, 1, 4)))
-        expect(editor.getSelectedScreenRange()).toEqual([[1, 2], [2, 20]])
-
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-          shiftKey: true
-        }, clientPositionForCharacter(component, 3, 11)))
-        expect(editor.getSelectedScreenRange()).toEqual([[2, 14], [3, 13]])
-
-        // reorients line-wise selections to keep the word selected regardless of
-        // where the subsequent shift-click occurs
-        editor.setCursorScreenPosition([2, 18], {autoscroll: false})
-        editor.getLastSelection().selectLine(null, {autoscroll: false})
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-          shiftKey: true
-        }, clientPositionForCharacter(component, 1, 4)))
-        expect(editor.getSelectedScreenRange()).toEqual([[1, 0], [3, 0]])
-
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-          shiftKey: true
-        }, clientPositionForCharacter(component, 3, 11)))
-        expect(editor.getSelectedScreenRange()).toEqual([[2, 0], [4, 0]])
-
-        expect(editor.testAutoscrollRequests).toEqual([])
-      })
-
-      it('expands the last selection on drag', () => {
-        const {component, editor} = buildComponent()
-        spyOn(component, 'handleMouseDragUntilMouseUp')
-
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-        }, clientPositionForCharacter(component, 1, 4)))
-
-        {
-          const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[0][0]
-          didDrag(clientPositionForCharacter(component, 8, 8))
-          expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [8, 8]])
-          didDrag(clientPositionForCharacter(component, 4, 8))
-          expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [4, 8]])
-          didStopDragging()
-          expect(editor.getSelectedScreenRange()).toEqual([[1, 4], [4, 8]])
-        }
-
-        // Click-drag a second selection... selections are not merged until the
-        // drag stops.
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-          metaKey: 1,
-        }, clientPositionForCharacter(component, 8, 8)))
-        {
           const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[1][0]
-          didDrag(clientPositionForCharacter(component, 2, 8))
-          expect(editor.getSelectedScreenRanges()).toEqual([
-            [[1, 4], [4, 8]],
-            [[2, 8], [8, 8]]
-          ])
-          didDrag(clientPositionForCharacter(component, 6, 8))
-          expect(editor.getSelectedScreenRanges()).toEqual([
-            [[1, 4], [4, 8]],
-            [[6, 8], [8, 8]]
-          ])
-          didDrag(clientPositionForCharacter(component, 2, 8))
-          expect(editor.getSelectedScreenRanges()).toEqual([
-            [[1, 4], [4, 8]],
-            [[2, 8], [8, 8]]
-          ])
-          didStopDragging()
-          expect(editor.getSelectedScreenRanges()).toEqual([
-            [[1, 4], [8, 8]]
-          ])
-        }
-      })
+          didDrag(clientPositionForCharacter(component, 0, 8))
+          expect(editor.getSelectedScreenRange()).toEqual([[0, 4], [1, 5]])
+          didDrag(clientPositionForCharacter(component, 2, 10))
+          expect(editor.getSelectedScreenRange()).toEqual([[1, 2], [2, 13]])
+        })
 
-      it('expands the selection word-wise on double-click-drag', () => {
-        const {component, editor} = buildComponent()
-        spyOn(component, 'handleMouseDragUntilMouseUp')
+        it('expands the selection line-wise on triple-click-drag', () => {
+          const {component, editor} = buildComponent()
+          spyOn(component, 'handleMouseDragUntilMouseUp')
 
-        component.didMouseDownOnContent(Object.assign({
-          detail: 1,
-          button: 0,
-        }, clientPositionForCharacter(component, 1, 4)))
-        component.didMouseDownOnContent(Object.assign({
-          detail: 2,
-          button: 0,
-        }, clientPositionForCharacter(component, 1, 4)))
+          const tripleClickPosition = clientPositionForCharacter(component, 2, 8)
+          component.didMouseDownOnContent(Object.assign({detail: 1, button: 0}, tripleClickPosition))
+          component.didMouseDownOnContent(Object.assign({detail: 2, button: 0}, tripleClickPosition))
+          component.didMouseDownOnContent(Object.assign({detail: 3, button: 0}, tripleClickPosition))
 
-        const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[1][0]
-        didDrag(clientPositionForCharacter(component, 0, 8))
-        expect(editor.getSelectedScreenRange()).toEqual([[0, 4], [1, 5]])
-        didDrag(clientPositionForCharacter(component, 2, 10))
-        expect(editor.getSelectedScreenRange()).toEqual([[1, 2], [2, 13]])
-      })
+          const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[2][0]
+          didDrag(clientPositionForCharacter(component, 1, 8))
+          expect(editor.getSelectedScreenRange()).toEqual([[1, 0], [3, 0]])
+          didDrag(clientPositionForCharacter(component, 4, 10))
+          expect(editor.getSelectedScreenRange()).toEqual([[2, 0], [5, 0]])
+        })
 
-      it('expands the selection line-wise on triple-click-drag', () => {
-        const {component, editor} = buildComponent()
-        spyOn(component, 'handleMouseDragUntilMouseUp')
+        it('destroys folds when clicking on their fold markers', async () => {
+          const {component, element, editor} = buildComponent()
+          editor.foldBufferRow(1)
+          await component.getNextUpdatePromise()
 
-        const tripleClickPosition = clientPositionForCharacter(component, 2, 8)
-        component.didMouseDownOnContent(Object.assign({detail: 1, button: 0}, tripleClickPosition))
-        component.didMouseDownOnContent(Object.assign({detail: 2, button: 0}, tripleClickPosition))
-        component.didMouseDownOnContent(Object.assign({detail: 3, button: 0}, tripleClickPosition))
+          const target = element.querySelector('.fold-marker')
+          const {clientX, clientY} = clientPositionForCharacter(component, 1, editor.lineLengthForScreenRow(1))
+          component.didMouseDownOnContent({detail: 1, button: 0, target, clientX, clientY})
+          expect(editor.isFoldedAtBufferRow(1)).toBe(false)
+          expect(editor.getCursorScreenPosition()).toEqual([0, 0])
+        })
 
-        const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[2][0]
-        didDrag(clientPositionForCharacter(component, 1, 8))
-        expect(editor.getSelectedScreenRange()).toEqual([[1, 0], [3, 0]])
-        didDrag(clientPositionForCharacter(component, 4, 10))
-        expect(editor.getSelectedScreenRange()).toEqual([[2, 0], [5, 0]])
-      })
+        it('autoscrolls the content when dragging near the edge of the scroll container', async () => {
+          const {component, element, editor} = buildComponent({width: 200, height: 200})
+          spyOn(component, 'handleMouseDragUntilMouseUp')
 
-      it('destroys folds when clicking on their fold markers', async () => {
-        const {component, element, editor} = buildComponent()
-        editor.foldBufferRow(1)
-        await component.getNextUpdatePromise()
+          let previousScrollTop = 0
+          let previousScrollLeft = 0
+          function assertScrolledDownAndRight () {
+            expect(component.getScrollTop()).toBeGreaterThan(previousScrollTop)
+            previousScrollTop = component.getScrollTop()
+            expect(component.getScrollLeft()).toBeGreaterThan(previousScrollLeft)
+            previousScrollLeft = component.getScrollLeft()
+          }
 
-        const target = element.querySelector('.fold-marker')
-        const {clientX, clientY} = clientPositionForCharacter(component, 1, editor.lineLengthForScreenRow(1))
-        component.didMouseDownOnContent({detail: 1, button: 0, target, clientX, clientY})
-        expect(editor.isFoldedAtBufferRow(1)).toBe(false)
-        expect(editor.getCursorScreenPosition()).toEqual([0, 0])
-      })
+          function assertScrolledUpAndLeft () {
+            expect(component.getScrollTop()).toBeLessThan(previousScrollTop)
+            previousScrollTop = component.getScrollTop()
+            expect(component.getScrollLeft()).toBeLessThan(previousScrollLeft)
+            previousScrollLeft = component.getScrollLeft()
+          }
 
-      it('autoscrolls the content when dragging near the edge of the scroll container', async () => {
-        const {component, element, editor} = buildComponent({width: 200, height: 200})
-        spyOn(component, 'handleMouseDragUntilMouseUp')
+          component.didMouseDownOnContent({detail: 1, button: 0, clientX: 100, clientY: 100})
+          const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[0][0]
 
-        let previousScrollTop = 0
-        let previousScrollLeft = 0
-        function assertScrolledDownAndRight () {
-          expect(component.getScrollTop()).toBeGreaterThan(previousScrollTop)
-          previousScrollTop = component.getScrollTop()
-          expect(component.getScrollLeft()).toBeGreaterThan(previousScrollLeft)
-          previousScrollLeft = component.getScrollLeft()
-        }
+          didDrag({clientX: 199, clientY: 199})
+          assertScrolledDownAndRight()
+          didDrag({clientX: 199, clientY: 199})
+          assertScrolledDownAndRight()
+          didDrag({clientX: 199, clientY: 199})
+          assertScrolledDownAndRight()
+          didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
+          assertScrolledUpAndLeft()
+          didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
+          assertScrolledUpAndLeft()
+          didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
+          assertScrolledUpAndLeft()
 
-        function assertScrolledUpAndLeft () {
-          expect(component.getScrollTop()).toBeLessThan(previousScrollTop)
-          previousScrollTop = component.getScrollTop()
-          expect(component.getScrollLeft()).toBeLessThan(previousScrollLeft)
-          previousScrollLeft = component.getScrollLeft()
-        }
+          // Don't artificially update scroll position beyond possible values
+          expect(component.getScrollTop()).toBe(0)
+          expect(component.getScrollLeft()).toBe(0)
+          didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
+          expect(component.getScrollTop()).toBe(0)
+          expect(component.getScrollLeft()).toBe(0)
 
-        component.didMouseDownOnContent({detail: 1, button: 0, clientX: 100, clientY: 100})
-        const {didDrag, didStopDragging} = component.handleMouseDragUntilMouseUp.argsForCall[0][0]
+          const maxScrollTop = component.getMaxScrollTop()
+          const maxScrollLeft = component.getMaxScrollLeft()
+          setScrollTop(component, maxScrollTop)
+          await setScrollLeft(component, maxScrollLeft)
 
-        didDrag({clientX: 199, clientY: 199})
-        assertScrolledDownAndRight()
-        didDrag({clientX: 199, clientY: 199})
-        assertScrolledDownAndRight()
-        didDrag({clientX: 199, clientY: 199})
-        assertScrolledDownAndRight()
-        didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
-        assertScrolledUpAndLeft()
-        didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
-        assertScrolledUpAndLeft()
-        didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
-        assertScrolledUpAndLeft()
-
-        // Don't artificially update scroll position beyond possible values
-        expect(component.getScrollTop()).toBe(0)
-        expect(component.getScrollLeft()).toBe(0)
-        didDrag({clientX: component.getGutterContainerWidth() + 1, clientY: 1})
-        expect(component.getScrollTop()).toBe(0)
-        expect(component.getScrollLeft()).toBe(0)
-
-        const maxScrollTop = component.getMaxScrollTop()
-        const maxScrollLeft = component.getMaxScrollLeft()
-        setScrollTop(component, maxScrollTop)
-        await setScrollLeft(component, maxScrollLeft)
-
-        didDrag({clientX: 199, clientY: 199})
-        didDrag({clientX: 199, clientY: 199})
-        didDrag({clientX: 199, clientY: 199})
-        expect(component.getScrollTop()).toBe(maxScrollTop)
-        expect(component.getScrollLeft()).toBe(maxScrollLeft)
+          didDrag({clientX: 199, clientY: 199})
+          didDrag({clientX: 199, clientY: 199})
+          didDrag({clientX: 199, clientY: 199})
+          expect(component.getScrollTop()).toBe(maxScrollTop)
+          expect(component.getScrollLeft()).toBe(maxScrollLeft)
+        })
       })
 
       it('pastes the previously selected text when clicking the middle mouse button on Linux', async () => {
@@ -3294,6 +3292,31 @@ describe('TextEditorComponent', () => {
           clientY: clientTopForLine(component, 10)
         })
         expect(editor.lineTextForBufferRow(10)).toBe('var')
+      })
+
+      it('does not paste into a read only editor when clicking the middle mouse button on Linux', async () => {
+        spyOn(electron.ipcRenderer, 'send').andCallFake(function (eventName, selectedText) {
+          if (eventName === 'write-text-to-selection-clipboard') {
+            clipboard.writeText(selectedText, 'selection')
+          }
+        })
+
+        const {component, editor} = buildComponent({platform: 'linux', readOnly: true})
+
+        // Select the word 'sort' on line 2 and copy to clipboard
+        editor.setSelectedBufferRange([[1, 6], [1, 10]])
+        await conditionPromise(() => TextEditor.clipboard.read() === 'sort')
+
+        // Middle-click in the buffer at line 11, column 1
+        component.didMouseDownOnContent({
+          button: 1,
+          clientX: clientLeftForCharacter(component, 10, 0),
+          clientY: clientTopForLine(component, 10)
+        })
+
+        // Ensure that the correct text was copied but not pasted
+        expect(TextEditor.clipboard.read()).toBe('sort')
+        expect(editor.lineTextForBufferRow(10)).toBe('')
       })
     })
 
@@ -3599,421 +3622,198 @@ describe('TextEditorComponent', () => {
   })
 
   describe('keyboard input', () => {
-    describe('on Chrome 56', () => {
-      it('handles inserted accented characters via the press-and-hold menu on macOS correctly', async () => {
-        const {editor, component, element} = buildComponent({text: '', chromeVersion: 56})
-        editor.insertText('x')
-        editor.setCursorBufferPosition([0, 1])
+    it('handles inserted accented characters via the press-and-hold menu on macOS correctly', () => {
+      const {editor, component, element} = buildComponent({text: '', chromeVersion: 57})
+      editor.insertText('x')
+      editor.setCursorBufferPosition([0, 1])
 
-        // Simulate holding the A key to open the press-and-hold menu,
-        // then closing it via ESC.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'Escape'})
-        component.didKeyup({code: 'Escape'})
-        expect(editor.getText()).toBe('xa')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xaa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
+      // Simulate holding the A key to open the press-and-hold menu,
+      // then closing it via ESC.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeyup({code: 'KeyA'})
+      component.didKeydown({code: 'Escape'})
+      component.didKeyup({code: 'Escape'})
+      expect(editor.getText()).toBe('xa')
+      // Ensure another "a" can be typed correctly.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyA'})
+      expect(editor.getText()).toBe('xaa')
+      editor.undo()
+      expect(editor.getText()).toBe('x')
 
-        // Simulate holding the A key to open the press-and-hold menu,
-        // then selecting an alternative by typing a number.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'Digit2'})
-        component.didKeyup({code: 'Digit2'})
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        expect(editor.getText()).toBe('xá')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
+      // Simulate holding the A key to open the press-and-hold menu,
+      // then selecting an alternative by typing a number.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeyup({code: 'KeyA'})
+      component.didKeydown({code: 'Digit2'})
+      component.didKeyup({code: 'Digit2'})
+      component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
+      expect(editor.getText()).toBe('xá')
+      // Ensure another "a" can be typed correctly.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyA'})
+      expect(editor.getText()).toBe('xáa')
+      editor.undo()
+      expect(editor.getText()).toBe('x')
 
-        // Simulate holding the A key to open the press-and-hold menu,
-        // then selecting an alternative by clicking on it.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        expect(editor.getText()).toBe('xá')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
+      // Simulate holding the A key to open the press-and-hold menu,
+      // then selecting an alternative by clicking on it.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeyup({code: 'KeyA'})
+      component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
+      expect(editor.getText()).toBe('xá')
+      // Ensure another "a" can be typed correctly.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyA'})
+      expect(editor.getText()).toBe('xáa')
+      editor.undo()
+      expect(editor.getText()).toBe('x')
 
-        // Simulate holding the A key to open the press-and-hold menu,
-        // cycling through the alternatives with the arrows, then selecting one of them with Enter.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.getHiddenInput().value = 'à'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.getHiddenInput().value = 'á'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xá')
-        component.didKeydown({code: 'Enter'})
-        component.didCompositionUpdate({data: 'á'})
-        component.getHiddenInput().value = 'á'
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'á', target: component.getHiddenInput()})
-        component.didKeyup({code: 'Enter'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xá')
+      // Simulate holding the A key to open the press-and-hold menu,
+      // cycling through the alternatives with the arrows, then selecting one of them with Enter.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeyup({code: 'KeyA'})
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionStart({data: ''})
+      component.didCompositionUpdate({data: 'à'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xà')
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionUpdate({data: 'á'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xá')
+      component.didKeydown({code: 'Enter'})
+      component.didCompositionUpdate({data: 'á'})
+      component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didCompositionEnd({data: 'á', target: component.refs.cursorsAndInput.refs.hiddenInput})
+      component.didKeyup({code: 'Enter'})
+      expect(editor.getText()).toBe('xá')
+      // Ensure another "a" can be typed correctly.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyA'})
+      expect(editor.getText()).toBe('xáa')
+      editor.undo()
+      expect(editor.getText()).toBe('x')
 
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
+      // Simulate holding the A key to open the press-and-hold menu,
+      // cycling through the alternatives with the arrows, then closing it via ESC.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeyup({code: 'KeyA'})
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionStart({data: ''})
+      component.didCompositionUpdate({data: 'à'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xà')
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionUpdate({data: 'á'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xá')
+      component.didKeydown({code: 'Escape'})
+      component.didCompositionUpdate({data: 'a'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didCompositionEnd({data: 'a', target: component.refs.cursorsAndInput.refs.hiddenInput})
+      component.didKeyup({code: 'Escape'})
+      expect(editor.getText()).toBe('xa')
+      // Ensure another "a" can be typed correctly.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyA'})
+      expect(editor.getText()).toBe('xaa')
+      editor.undo()
+      expect(editor.getText()).toBe('x')
 
-        // Simulate holding the A key to open the press-and-hold menu,
-        // cycling through the alternatives with the arrows, then closing it via ESC.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.getHiddenInput().value = 'à'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.getHiddenInput().value = 'á'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xá')
-        component.didKeydown({code: 'Escape'})
-        component.didCompositionUpdate({data: 'a'})
-        component.getHiddenInput().value = 'a'
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'a', target: component.refs.cursorsAndInput.refs.hiddenInput})
-        component.didKeyup({code: 'Escape'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xa')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xaa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
+      // Simulate pressing the O key and holding the A key to open the press-and-hold menu right before releasing the O key,
+      // cycling through the alternatives with the arrows, then closing it via ESC.
+      component.didKeydown({code: 'KeyO'})
+      component.didKeypress({code: 'KeyO'})
+      component.didTextInput({data: 'o', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyO'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionStart({data: ''})
+      component.didCompositionUpdate({data: 'à'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xoà')
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionUpdate({data: 'á'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xoá')
+      component.didKeydown({code: 'Escape'})
+      component.didCompositionUpdate({data: 'a'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didCompositionEnd({data: 'a', target: component.refs.cursorsAndInput.refs.hiddenInput})
+      component.didKeyup({code: 'Escape'})
+      expect(editor.getText()).toBe('xoa')
+      // Ensure another "a" can be typed correctly.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyA'})
+      editor.undo()
+      expect(editor.getText()).toBe('x')
 
-        // Simulate pressing the O key and holding the A key to open the press-and-hold menu right before releasing the O key,
-        // cycling through the alternatives with the arrows, then closing it via ESC.
-        component.didKeydown({code: 'KeyO'})
-        component.didKeypress({code: 'KeyO'})
-        component.didTextInput({data: 'o', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyO'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.getHiddenInput().value = 'à'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xoà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.getHiddenInput().value = 'á'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xoá')
-        component.didKeydown({code: 'Escape'})
-        component.didCompositionUpdate({data: 'a'})
-        component.getHiddenInput().value = 'a'
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'a', target: component.refs.cursorsAndInput.refs.hiddenInput})
-        component.didKeyup({code: 'Escape'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xoa')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-
-        // Simulate holding the A key to open the press-and-hold menu,
-        // cycling through the alternatives with the arrows, then closing it by changing focus.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.getHiddenInput().value = 'à'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.getHiddenInput().value = 'á'
-        component.didKeyup({code: 'ArrowRight'})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xá')
-        component.didCompositionUpdate({data: 'á'})
-        component.getHiddenInput().value = 'á'
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'á', target: component.refs.cursorsAndInput.refs.hiddenInput})
-        await getNextTickPromise()
-        expect(editor.getText()).toBe('xá')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-      })
-    })
-
-    describe('on other versions of Chrome', () => {
-      it('handles inserted accented characters via the press-and-hold menu on macOS correctly', () => {
-        const {editor, component, element} = buildComponent({text: '', chromeVersion: 57})
-        editor.insertText('x')
-        editor.setCursorBufferPosition([0, 1])
-
-        // Simulate holding the A key to open the press-and-hold menu,
-        // then closing it via ESC.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'Escape'})
-        component.didKeyup({code: 'Escape'})
-        expect(editor.getText()).toBe('xa')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xaa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-
-        // Simulate holding the A key to open the press-and-hold menu,
-        // then selecting an alternative by typing a number.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'Digit2'})
-        component.didKeyup({code: 'Digit2'})
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        expect(editor.getText()).toBe('xá')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-
-        // Simulate holding the A key to open the press-and-hold menu,
-        // then selecting an alternative by clicking on it.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        expect(editor.getText()).toBe('xá')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-
-        // Simulate holding the A key to open the press-and-hold menu,
-        // cycling through the alternatives with the arrows, then selecting one of them with Enter.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xá')
-        component.didKeydown({code: 'Enter'})
-        component.didCompositionUpdate({data: 'á'})
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'á', target: component.refs.cursorsAndInput.refs.hiddenInput})
-        component.didKeyup({code: 'Enter'})
-        expect(editor.getText()).toBe('xá')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-
-        // Simulate holding the A key to open the press-and-hold menu,
-        // cycling through the alternatives with the arrows, then closing it via ESC.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xá')
-        component.didKeydown({code: 'Escape'})
-        component.didCompositionUpdate({data: 'a'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'a', target: component.refs.cursorsAndInput.refs.hiddenInput})
-        component.didKeyup({code: 'Escape'})
-        expect(editor.getText()).toBe('xa')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xaa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-
-        // Simulate pressing the O key and holding the A key to open the press-and-hold menu right before releasing the O key,
-        // cycling through the alternatives with the arrows, then closing it via ESC.
-        component.didKeydown({code: 'KeyO'})
-        component.didKeypress({code: 'KeyO'})
-        component.didTextInput({data: 'o', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyO'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xoà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xoá')
-        component.didKeydown({code: 'Escape'})
-        component.didCompositionUpdate({data: 'a'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'a', target: component.refs.cursorsAndInput.refs.hiddenInput})
-        component.didKeyup({code: 'Escape'})
-        expect(editor.getText()).toBe('xoa')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-
-        // Simulate holding the A key to open the press-and-hold menu,
-        // cycling through the alternatives with the arrows, then closing it by changing focus.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeydown({code: 'KeyA'})
-        component.didKeyup({code: 'KeyA'})
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionStart({data: ''})
-        component.didCompositionUpdate({data: 'à'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xà')
-        component.didKeydown({code: 'ArrowRight'})
-        component.didCompositionUpdate({data: 'á'})
-        component.didKeyup({code: 'ArrowRight'})
-        expect(editor.getText()).toBe('xá')
-        component.didCompositionUpdate({data: 'á'})
-        component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didCompositionEnd({data: 'á', target: component.refs.cursorsAndInput.refs.hiddenInput})
-        expect(editor.getText()).toBe('xá')
-        // Ensure another "a" can be typed correctly.
-        component.didKeydown({code: 'KeyA'})
-        component.didKeypress({code: 'KeyA'})
-        component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
-        component.didKeyup({code: 'KeyA'})
-        expect(editor.getText()).toBe('xáa')
-        editor.undo()
-        expect(editor.getText()).toBe('x')
-      })
+      // Simulate holding the A key to open the press-and-hold menu,
+      // cycling through the alternatives with the arrows, then closing it by changing focus.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeydown({code: 'KeyA'})
+      component.didKeyup({code: 'KeyA'})
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionStart({data: ''})
+      component.didCompositionUpdate({data: 'à'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xà')
+      component.didKeydown({code: 'ArrowRight'})
+      component.didCompositionUpdate({data: 'á'})
+      component.didKeyup({code: 'ArrowRight'})
+      expect(editor.getText()).toBe('xá')
+      component.didCompositionUpdate({data: 'á'})
+      component.didTextInput({data: 'á', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didCompositionEnd({data: 'á', target: component.refs.cursorsAndInput.refs.hiddenInput})
+      expect(editor.getText()).toBe('xá')
+      // Ensure another "a" can be typed correctly.
+      component.didKeydown({code: 'KeyA'})
+      component.didKeypress({code: 'KeyA'})
+      component.didTextInput({data: 'a', stopPropagation: () => {}, preventDefault: () => {}})
+      component.didKeyup({code: 'KeyA'})
+      expect(editor.getText()).toBe('xáa')
+      editor.undo()
+      expect(editor.getText()).toBe('x')
     })
   })
 
@@ -4124,7 +3924,7 @@ describe('TextEditorComponent', () => {
       // Capture the width of the lines before requesting the width of
       // longest line, because making that request forces a DOM update
       const actualWidth = element.querySelector('.lines').style.width
-      const expectedWidth = Math.round(
+      const expectedWidth = Math.ceil(
         component.pixelPositionForScreenPosition(Point(3, Infinity)).left +
         component.getBaseCharacterWidth()
       )
@@ -4428,11 +4228,14 @@ describe('TextEditorComponent', () => {
       const {component, editor} = buildComponent()
 
       let dragging = false
-      component.handleMouseDragUntilMouseUp({
-        didDrag: (event) => { dragging = true },
-        didStopDragging: () => { dragging = false }
-      })
+      function startDragging () {
+        component.handleMouseDragUntilMouseUp({
+          didDrag: (event) => { dragging = true },
+          didStopDragging: () => { dragging = false }
+        })
+      }
 
+      startDragging()
       window.dispatchEvent(new MouseEvent('mousemove'))
       await getNextAnimationFramePromise()
       expect(dragging).toBe(true)
@@ -4448,6 +4251,17 @@ describe('TextEditorComponent', () => {
       window.dispatchEvent(new MouseEvent('mousemove'))
       await getNextAnimationFramePromise()
       expect(dragging).toBe(false)
+
+      // Pressing a modifier key does not terminate dragging, (to ensure we can add new selections with the mouse)
+      startDragging()
+      window.dispatchEvent(new MouseEvent('mousemove'))
+      await getNextAnimationFramePromise()
+      expect(dragging).toBe(true)
+      component.didKeydown({key: 'Control'})
+      component.didKeydown({key: 'Alt'})
+      component.didKeydown({key: 'Shift'})
+      component.didKeydown({key: 'Meta'})
+      expect(dragging).toBe(true)
     })
 
     function getNextAnimationFramePromise () {
@@ -4459,14 +4273,16 @@ describe('TextEditorComponent', () => {
 function buildEditor (params = {}) {
   const text = params.text != null ? params.text : SAMPLE_TEXT
   const buffer = new TextBuffer({text})
-  const editorParams = {buffer}
+  const editorParams = {buffer, readOnly: params.readOnly}
   if (params.height != null) params.autoHeight = false
   for (const paramName of ['mini', 'autoHeight', 'autoWidth', 'lineNumberGutterVisible', 'showLineNumbers', 'placeholderText', 'softWrapped', 'scrollSensitivity']) {
     if (params[paramName] != null) editorParams[paramName] = params[paramName]
   }
+  atom.grammars.autoAssignLanguageMode(buffer)
   const editor = new TextEditor(editorParams)
   editor.testAutoscrollRequests = []
   editor.onDidRequestAutoscroll((request) => { editor.testAutoscrollRequests.push(request) })
+  editors.push(editor)
   return editor
 }
 

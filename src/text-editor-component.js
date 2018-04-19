@@ -56,7 +56,7 @@ class TextEditorComponent {
     this.props = props
 
     if (!props.model) {
-      props.model = new TextEditor({mini: props.mini})
+      props.model = new TextEditor({mini: props.mini, readOnly: props.readOnly})
     }
     this.props.model.component = this
 
@@ -126,7 +126,6 @@ class TextEditorComponent {
     this.blockDecorationResizeObserver = new ResizeObserver(this.didResizeBlockDecorations.bind(this))
     this.lineComponentsByScreenLineId = new Map()
     this.overlayComponents = new Set()
-    this.overlayDimensionsByElement = new WeakMap()
     this.shouldRenderDummyScrollbars = true
     this.remeasureScrollbars = false
     this.pendingAutoscroll = null
@@ -171,6 +170,7 @@ class TextEditorComponent {
     this.textDecorationBoundaries = []
     this.pendingScrollTopRow = this.props.initialScrollTopRow
     this.pendingScrollLeftColumn = this.props.initialScrollLeftColumn
+    this.tabIndex = this.props.element && this.props.element.tabIndex ? this.props.element.tabIndex : -1
 
     this.measuredContent = false
     this.queryGuttersToRender()
@@ -266,14 +266,22 @@ class TextEditorComponent {
     if (useScheduler === true) {
       const scheduler = etch.getScheduler()
       scheduler.readDocument(() => {
-        this.measureContentDuringUpdateSync()
+        const restartFrame = this.measureContentDuringUpdateSync()
         scheduler.updateDocument(() => {
-          this.updateSyncAfterMeasuringContent()
+          if (restartFrame) {
+            this.updateSync(true)
+          } else {
+            this.updateSyncAfterMeasuringContent()
+          }
         })
       })
     } else {
-      this.measureContentDuringUpdateSync()
-      this.updateSyncAfterMeasuringContent()
+      const restartFrame = this.measureContentDuringUpdateSync()
+      if (restartFrame) {
+        this.updateSync(false)
+      } else {
+        this.updateSyncAfterMeasuringContent()
+      }
     }
 
     this.updateScheduled = false
@@ -391,15 +399,16 @@ class TextEditorComponent {
     this.measureHorizontalPositions()
     this.updateAbsolutePositionedDecorations()
 
+    const isHorizontalScrollbarVisible = (
+      this.canScrollHorizontally() &&
+      this.getHorizontalScrollbarHeight() > 0
+    )
+
     if (this.pendingAutoscroll) {
       this.derivedDimensionsCache = {}
       const {screenRange, options} = this.pendingAutoscroll
       this.autoscrollHorizontally(screenRange, options)
 
-      const isHorizontalScrollbarVisible = (
-        this.canScrollHorizontally() &&
-        this.getHorizontalScrollbarHeight() > 0
-      )
       if (!wasHorizontalScrollbarVisible && isHorizontalScrollbarVisible) {
         this.autoscrollVertically(screenRange, options)
       }
@@ -408,6 +417,8 @@ class TextEditorComponent {
 
     this.linesToMeasure.clear()
     this.measuredContent = true
+
+    return wasHorizontalScrollbarVisible !== isHorizontalScrollbarVisible
   }
 
   updateSyncAfterMeasuringContent () {
@@ -461,9 +472,13 @@ class TextEditorComponent {
       }
     }
 
-    let attributes = null
+    let attributes = {}
     if (model.isMini()) {
-      attributes = {mini: ''}
+      attributes.mini = ''
+    }
+
+    if (model.isReadOnly()) {
+      attributes.readonly = ''
     }
 
     const dataset = {encoding: model.getEncoding()}
@@ -573,7 +588,6 @@ class TextEditorComponent {
         on: {mousedown: this.didMouseDownOnContent},
         style
       },
-      this.renderHighlightDecorations(),
       this.renderLineTiles(),
       this.renderBlockDecorationMeasurementArea(),
       this.renderCharacterMeasurementLine()
@@ -591,12 +605,14 @@ class TextEditorComponent {
   }
 
   renderLineTiles () {
-    const children = []
     const style = {
       position: 'absolute',
       contain: 'strict',
       overflow: 'hidden'
     }
+
+    const children = []
+    children.push(this.renderHighlightDecorations())
 
     if (this.hasInitialMeasurements) {
       const {lineComponentsByScreenLineId} = this
@@ -678,7 +694,8 @@ class TextEditorComponent {
       scrollWidth: this.getScrollWidth(),
       decorationsToRender: this.decorationsToRender,
       cursorsBlinkedOff: this.cursorsBlinkedOff,
-      hiddenInputPosition: this.hiddenInputPosition
+      hiddenInputPosition: this.hiddenInputPosition,
+      tabIndex: this.tabIndex
     })
   }
 
@@ -803,15 +820,9 @@ class TextEditorComponent {
         {
           key: overlayProps.element,
           overlayComponents: this.overlayComponents,
-          measuredDimensions: this.overlayDimensionsByElement.get(overlayProps.element),
           didResize: (overlayComponent) => {
             this.updateOverlayToRender(overlayProps)
-            overlayComponent.update(Object.assign(
-              {
-                measuredDimensions: this.overlayDimensionsByElement.get(overlayProps.element)
-              },
-              overlayProps
-            ))
+            overlayComponent.update(overlayProps)
           }
         },
         overlayProps
@@ -1357,7 +1368,6 @@ class TextEditorComponent {
     let wrapperTop = contentClientRect.top + this.pixelPositionAfterBlocksForRow(row) + this.getLineHeight()
     let wrapperLeft = contentClientRect.left + this.pixelLeftForRowAndColumn(row, column)
     const clientRect = element.getBoundingClientRect()
-    this.overlayDimensionsByElement.set(element, clientRect)
 
     if (avoidOverflow !== false) {
       const computedStyle = window.getComputedStyle(element)
@@ -1518,28 +1528,24 @@ class TextEditorComponent {
   didMouseWheel (event) {
     const scrollSensitivity = this.props.model.getScrollSensitivity() / 100
 
-    let {deltaX, deltaY} = event
+    let {wheelDeltaX, wheelDeltaY} = event
 
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
-      deltaX = (Math.sign(deltaX) === 1)
-        ? Math.max(1, deltaX * scrollSensitivity)
-        : Math.min(-1, deltaX * scrollSensitivity)
-      deltaY = 0
+    if (Math.abs(wheelDeltaX) > Math.abs(wheelDeltaY)) {
+      wheelDeltaX = wheelDeltaX * scrollSensitivity
+      wheelDeltaY = 0
     } else {
-      deltaX = 0
-      deltaY = (Math.sign(deltaY) === 1)
-        ? Math.max(1, deltaY * scrollSensitivity)
-        : Math.min(-1, deltaY * scrollSensitivity)
+      wheelDeltaX = 0
+      wheelDeltaY = wheelDeltaY * scrollSensitivity
     }
 
     if (this.getPlatform() !== 'darwin' && event.shiftKey) {
-      let temp = deltaX
-      deltaX = deltaY
-      deltaY = temp
+      let temp = wheelDeltaX
+      wheelDeltaX = wheelDeltaY
+      wheelDeltaY = temp
     }
 
-    const scrollLeftChanged = deltaX !== 0 && this.setScrollLeft(this.getScrollLeft() + deltaX)
-    const scrollTopChanged = deltaY !== 0 && this.setScrollTop(this.getScrollTop() + deltaY)
+    const scrollLeftChanged = wheelDeltaX !== 0 && this.setScrollLeft(this.getScrollLeft() - wheelDeltaX)
+    const scrollTopChanged = wheelDeltaY !== 0 && this.setScrollTop(this.getScrollTop() - wheelDeltaY)
 
     if (scrollLeftChanged || scrollTopChanged) this.updateSync()
   }
@@ -1616,11 +1622,23 @@ class TextEditorComponent {
     if (this.isInputEnabled()) {
       event.stopPropagation()
 
-      // WARNING: If we call preventDefault on the input of a space character,
-      // then the browser interprets the spacebar keypress as a page-down command,
-      // causing spaces to scroll elements containing editors. This is impossible
-      // to test.
-      if (event.data !== ' ') event.preventDefault()
+      // WARNING: If we call preventDefault on the input of a space
+      // character, then the browser interprets the spacebar keypress as a
+      // page-down command, causing spaces to scroll elements containing
+      // editors. This means typing space will actually change the contents
+      // of the hidden input, which will cause the browser to autoscroll the
+      // scroll container to reveal the input if it is off screen (See
+      // https://github.com/atom/atom/issues/16046). To correct for this
+      // situation, we automatically reset the scroll position to 0,0 after
+      // typing a space. None of this can really be tested.
+      if (event.data === ' ') {
+        window.setImmediate(() => {
+          this.refs.scrollContainer.scrollTop = 0
+          this.refs.scrollContainer.scrollLeft = 0
+        })
+      } else {
+        event.preventDefault()
+      }
 
       // If the input event is fired while the accented character menu is open it
       // means that the user has chosen one of the accented alternatives. Thus, we
@@ -1653,8 +1671,11 @@ class TextEditorComponent {
   didKeydown (event) {
     // Stop dragging when user interacts with the keyboard. This prevents
     // unwanted selections in the case edits are performed while selecting text
-    // at the same time.
-    if (this.stopDragging) this.stopDragging()
+    // at the same time. Modifier keys are exempt to preserve the ability to
+    // add selections, shift-scroll horizontally while selecting.
+    if (this.stopDragging && event.key !== 'Control' && event.key !== 'Alt' && event.key !== 'Meta' && event.key !== 'Shift') {
+      this.stopDragging()
+    }
 
     if (this.lastKeydownBeforeKeypress != null) {
       if (this.lastKeydownBeforeKeypress.code === event.code) {
@@ -1705,10 +1726,6 @@ class TextEditorComponent {
       return
     }
 
-    if (this.getChromeVersion() === 56) {
-      this.getHiddenInput().value = ''
-    }
-
     this.compositionCheckpoint = this.props.model.createCheckpoint()
     if (this.accentedCharacterMenuIsOpen) {
       this.props.model.selectLeft()
@@ -1716,16 +1733,7 @@ class TextEditorComponent {
   }
 
   didCompositionUpdate (event) {
-    if (this.getChromeVersion() === 56) {
-      process.nextTick(() => {
-        if (this.compositionCheckpoint != null) {
-          const previewText = this.getHiddenInput().value
-          this.props.model.insertText(previewText, {select: true})
-        }
-      })
-    } else {
-      this.props.model.insertText(event.data, {select: true})
-    }
+    this.props.model.insertText(event.data, {select: true})
   }
 
   didCompositionEnd (event) {
@@ -1749,25 +1757,22 @@ class TextEditorComponent {
       }
     }
 
-    // On Linux, position the cursor on middle mouse button click. A
-    // textInput event with the contents of the selection clipboard will be
-    // dispatched by the browser automatically on mouseup.
-    if (platform === 'linux' && button === 1) {
-      const selection = clipboard.readText('selection')
-      const screenPosition = this.screenPositionForMouseEvent(event)
+    const screenPosition = this.screenPositionForMouseEvent(event)
+
+    if (button === 1) {
       model.setCursorScreenPosition(screenPosition, {autoscroll: false})
-      model.insertText(selection)
+
+      // On Linux, pasting happens on middle click. A textInput event with the
+      // contents of the selection clipboard will be dispatched by the browser
+      // automatically on mouseup.
+      if (platform === 'linux' && this.isInputEnabled()) model.insertText(clipboard.readText('selection'))
       return
     }
 
-    // Only handle mousedown events for left mouse button (or the middle mouse
-    // button on Linux where it pastes the selection clipboard).
     if (button !== 0) return
 
     // Ctrl-click brings up the context menu on macOS
     if (platform === 'darwin' && ctrlKey) return
-
-    const screenPosition = this.screenPositionForMouseEvent(event)
 
     if (target && target.matches('.fold-marker')) {
       const bufferPosition = model.bufferPositionForScreenPosition(screenPosition)
@@ -2456,8 +2461,12 @@ class TextEditorComponent {
 
   didChangeDisplayLayer (changes) {
     for (let i = 0; i < changes.length; i++) {
-      const {start, oldExtent, newExtent} = changes[i]
-      this.spliceLineTopIndex(start.row, oldExtent.row, newExtent.row)
+      const {oldRange, newRange} = changes[i]
+      this.spliceLineTopIndex(
+        newRange.start.row,
+        oldRange.end.row - oldRange.start.row,
+        newRange.end.row - newRange.start.row
+      )
     }
 
     this.scheduleUpdate()
@@ -2692,7 +2701,7 @@ class TextEditorComponent {
   }
 
   getContentWidth () {
-    return Math.round(this.getLongestLineWidth() + this.getBaseCharacterWidth())
+    return Math.ceil(this.getLongestLineWidth() + this.getBaseCharacterWidth())
   }
 
   getScrollContainerClientWidthInBaseCharacters () {
@@ -2802,7 +2811,7 @@ class TextEditorComponent {
   setScrollTop (scrollTop) {
     if (Number.isNaN(scrollTop) || scrollTop == null) return false
 
-    scrollTop = Math.round(Math.max(0, Math.min(this.getMaxScrollTop(), scrollTop)))
+    scrollTop = roundToPhysicalPixelBoundary(Math.max(0, Math.min(this.getMaxScrollTop(), scrollTop)))
     if (scrollTop !== this.scrollTop) {
       this.derivedDimensionsCache = {}
       this.scrollTopPending = true
@@ -2833,7 +2842,7 @@ class TextEditorComponent {
   setScrollLeft (scrollLeft) {
     if (Number.isNaN(scrollLeft) || scrollLeft == null) return false
 
-    scrollLeft = Math.round(Math.max(0, Math.min(this.getMaxScrollLeft(), scrollLeft)))
+    scrollLeft = roundToPhysicalPixelBoundary(Math.max(0, Math.min(this.getMaxScrollLeft(), scrollLeft)))
     if (scrollLeft !== this.scrollLeft) {
       this.scrollLeftPending = true
       this.scrollLeft = scrollLeft
@@ -2956,11 +2965,11 @@ class TextEditorComponent {
   }
 
   setInputEnabled (inputEnabled) {
-    this.props.inputEnabled = inputEnabled
+    this.props.model.update({keyboardInputEnabled: inputEnabled})
   }
 
-  isInputEnabled (inputEnabled) {
-    return this.props.inputEnabled != null ? this.props.inputEnabled : true
+  isInputEnabled () {
+    return !this.props.model.isReadOnly() && this.props.model.isKeyboardInputEnabled()
   }
 
   getHiddenInput () {
@@ -3011,7 +3020,7 @@ class DummyScrollbarComponent {
 
     const outerStyle = {
       position: 'absolute',
-      contain: 'strict',
+      contain: 'content',
       zIndex: 1,
       willChange: 'transform'
     }
@@ -3513,7 +3522,7 @@ class CursorsAndInputComponent {
 
       const cursorStyle = {
         height: cursorHeight,
-        width: pixelWidth + 'px',
+        width: Math.min(pixelWidth, scrollWidth - pixelLeft) + 'px',
         transform: `translate(${pixelLeft}px, ${pixelTop}px)`
       }
       if (extraCursorStyle) Object.assign(cursorStyle, extraCursorStyle)
@@ -3534,7 +3543,8 @@ class CursorsAndInputComponent {
         zIndex: 1,
         width: scrollWidth + 'px',
         height: scrollHeight + 'px',
-        pointerEvents: 'none'
+        pointerEvents: 'none',
+        userSelect: 'none'
       }
     }, children)
   }
@@ -3547,7 +3557,7 @@ class CursorsAndInputComponent {
     const {
       lineHeight, hiddenInputPosition, didBlurHiddenInput, didFocusHiddenInput,
       didPaste, didTextInput, didKeydown, didKeyup, didKeypress,
-      didCompositionStart, didCompositionUpdate, didCompositionEnd
+      didCompositionStart, didCompositionUpdate, didCompositionEnd, tabIndex
     } = this.props
 
     let top, left
@@ -3575,7 +3585,7 @@ class CursorsAndInputComponent {
         compositionupdate: didCompositionUpdate,
         compositionend: didCompositionEnd
       },
-      tabIndex: -1,
+      tabIndex: tabIndex,
       style: {
         position: 'absolute',
         width: '1px',
@@ -4010,6 +4020,7 @@ class HighlightsComponent {
     this.element.style.contain = 'strict'
     this.element.style.position = 'absolute'
     this.element.style.overflow = 'hidden'
+    this.element.style.userSelect = 'none'
     this.highlightComponentsByKey = new Map()
     this.update(props)
   }
@@ -4207,17 +4218,26 @@ class OverlayComponent {
     this.element.style.zIndex = 4
     this.element.style.top = (this.props.pixelTop || 0) + 'px'
     this.element.style.left = (this.props.pixelLeft || 0) + 'px'
+    this.currentContentRect = null
 
     // Synchronous DOM updates in response to resize events might trigger a
     // "loop limit exceeded" error. We disconnect the observer before
     // potentially mutating the DOM, and then reconnect it on the next tick.
+    // Note: ResizeObserver calls its callback when .observe is called
     this.resizeObserver = new ResizeObserver((entries) => {
       const {contentRect} = entries[0]
-      if (contentRect.width !== this.props.measuredDimensions.width || contentRect.height !== this.props.measuredDimensions.height) {
+
+      if (
+        this.currentContentRect &&
+        (this.currentContentRect.width !== contentRect.width ||
+          this.currentContentRect.height !== contentRect.height)
+      ) {
         this.resizeObserver.disconnect()
         this.props.didResize(this)
         process.nextTick(() => { this.resizeObserver.observe(this.props.element) })
       }
+
+      this.currentContentRect = contentRect
     })
     this.didAttach()
     this.props.overlayComponents.add(this)
